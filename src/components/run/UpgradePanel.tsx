@@ -13,6 +13,7 @@ const iconMap = {
   "skill-up": Swords,
   "element-mod": Gem,
   "stat-mod": Gem,
+  "hero-core": Sparkles,
 } as const;
 
 interface UpgradePanelProps {

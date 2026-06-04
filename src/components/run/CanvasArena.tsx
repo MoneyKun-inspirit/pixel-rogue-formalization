@@ -76,6 +76,18 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
         context.stroke();
       }
 
+      if (effect.kind === "burst" && effect.radius) {
+        context.strokeStyle = elementPalette[effect.element];
+        context.lineWidth = 6;
+        context.beginPath();
+        context.arc(effect.x, effect.y, effect.radius * (1 - progress * 0.35), 0, Math.PI * 2);
+        context.stroke();
+        context.fillStyle = `${elementPalette[effect.element]}33`;
+        context.beginPath();
+        context.arc(effect.x, effect.y, effect.radius * 0.42, 0, Math.PI * 2);
+        context.fill();
+      }
+
       context.restore();
     });
 
@@ -126,12 +138,100 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
       context.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, enemy.radius * 2, 4);
       context.fillStyle = "#fe7272";
       context.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, (enemy.hp / enemy.maxHp) * enemy.radius * 2, 4);
+
+      if (snapshot.heroId === "ranger" && snapshot.heroCore.ranger.markTargetId === enemy.id) {
+        context.strokeStyle = "#72f3c7";
+        context.lineWidth = 2;
+        context.strokeRect(enemy.x - enemy.radius - 6, enemy.y - enemy.radius - 6, enemy.radius * 2 + 12, enemy.radius * 2 + 12);
+        context.fillStyle = "#72f3c7";
+        context.fillRect(enemy.x - 10, enemy.y - enemy.radius - 18, 20, 4);
+        context.fillStyle = "#d7fff0";
+        context.font = "11px 'Silkscreen', cursive";
+        context.fillText(`${snapshot.heroCore.ranger.markStacks}`, enemy.x - 4, enemy.y - enemy.radius - 24);
+      }
     });
+
+    if (snapshot.heroId === "warrior") {
+      const furyRatio = snapshot.heroCore.warrior.fury / snapshot.heroCore.warrior.maxFury;
+      if (furyRatio > 0.05 || snapshot.heroCore.warrior.overdriveTimer > 0) {
+        context.save();
+        context.strokeStyle = snapshot.heroCore.warrior.overdriveTimer > 0 ? "#ff7a45" : "rgba(255,122,69,0.45)";
+        context.lineWidth = snapshot.heroCore.warrior.overdriveTimer > 0 ? 5 : 3;
+        context.beginPath();
+        context.arc(snapshot.player.x, snapshot.player.y, 22 + furyRatio * 12, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
+      }
+    }
+
+    if (snapshot.heroId === "ranger") {
+      const momentumRatio = snapshot.heroCore.ranger.momentum / snapshot.heroCore.ranger.momentumMax;
+      if (momentumRatio > 0.05) {
+        context.save();
+        context.strokeStyle = `rgba(114, 243, 199, ${0.28 + momentumRatio * 0.42})`;
+        context.lineWidth = 3;
+        context.beginPath();
+        context.arc(snapshot.player.x, snapshot.player.y, 24 + momentumRatio * 10, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * momentumRatio);
+        context.stroke();
+        context.restore();
+      }
+
+      if (snapshot.heroCore.ranger.markTargetId !== null) {
+        const markedEnemy = snapshot.enemies.find((enemy) => enemy.id === snapshot.heroCore.ranger.markTargetId);
+        if (markedEnemy) {
+          context.save();
+          context.strokeStyle = "rgba(114, 243, 199, 0.35)";
+          context.lineWidth = 2;
+          context.beginPath();
+          context.moveTo(snapshot.player.x, snapshot.player.y);
+          context.lineTo(markedEnemy.x, markedEnemy.y);
+          context.stroke();
+          context.restore();
+        }
+      }
+    }
 
     context.fillStyle = snapshot.hero.color;
     context.fillRect(snapshot.player.x - 14, snapshot.player.y - 14, 28, 28);
     context.fillStyle = "#ffffff";
     context.fillRect(snapshot.player.x - 4, snapshot.player.y - 18, 8, 6);
+
+    if (snapshot.heroId === "mage") {
+      snapshot.heroCore.mage.sigils.forEach((sigil, index) => {
+        const angle = (Math.PI * 2 * index) / Math.max(1, snapshot.heroCore.mage.maxSigils) - Math.PI / 2;
+        const orbitX = snapshot.player.x + Math.cos(angle) * 26;
+        const orbitY = snapshot.player.y + Math.sin(angle) * 26;
+        context.fillStyle = elementPalette[sigil];
+        context.fillRect(orbitX - 5, orbitY - 5, 10, 10);
+      });
+
+      if (snapshot.heroCore.mage.resonanceTimer > 0) {
+        context.strokeStyle = elementPalette[snapshot.heroCore.mage.resonanceElement];
+        context.lineWidth = 3;
+        context.beginPath();
+        context.arc(snapshot.player.x, snapshot.player.y, 34, 0, Math.PI * 2);
+        context.stroke();
+
+        const resonanceProgress = snapshot.heroCore.mage.resonanceTimer / snapshot.heroCore.mage.resonanceDuration;
+        context.strokeStyle = `${elementPalette[snapshot.heroCore.mage.resonanceElement]}99`;
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(snapshot.player.x, snapshot.player.y, 44 + (1 - resonanceProgress) * 8, 0, Math.PI * 2);
+        context.stroke();
+
+        for (let index = 0; index < 4; index += 1) {
+          const angle = snapshot.time * 2.4 + (Math.PI / 2) * index;
+          const orbitX = snapshot.player.x + Math.cos(angle) * 42;
+          const orbitY = snapshot.player.y + Math.sin(angle) * 42;
+          context.save();
+          context.translate(orbitX, orbitY);
+          context.rotate(angle);
+          context.fillStyle = elementPalette[snapshot.heroCore.mage.resonanceElement];
+          context.fillRect(-4, -4, 8, 8);
+          context.restore();
+        }
+      }
+    }
 
     snapshot.floatingTexts.forEach((text) => {
       context.fillStyle = text.color;

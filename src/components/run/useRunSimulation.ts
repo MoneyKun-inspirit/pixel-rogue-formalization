@@ -11,6 +11,12 @@ function cloneSnapshot(snapshot: RunSnapshot) {
     projectiles: snapshot.projectiles.map((projectile) => ({ ...projectile })),
     attackEffects: snapshot.attackEffects.map((effect) => ({ ...effect })),
     ownedSkills: snapshot.ownedSkills.map((skill) => ({ ...skill })),
+    heroCore: {
+      warrior: { ...snapshot.heroCore.warrior },
+      ranger: { ...snapshot.heroCore.ranger },
+      mage: { ...snapshot.heroCore.mage, sigils: [...snapshot.heroCore.mage.sigils] },
+    },
+    takenHeroCoreUpgrades: [...snapshot.takenHeroCoreUpgrades],
     upgrades: snapshot.upgrades.map((upgrade) => ({ ...upgrade })),
     floatingTexts: snapshot.floatingTexts.map((text) => ({ ...text })),
     stats: { ...snapshot.stats },

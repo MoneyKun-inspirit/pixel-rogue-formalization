@@ -1,4 +1,4 @@
-import type { ElementType, HeroClass, HeroDefinition, SkillDefinition } from "@/game/types";
+import type { ElementType, HeroClass, HeroDefinition, SkillDefinition, UpgradeOption } from "@/game/types";
 
 export const ARENA_WIDTH = 960;
 export const ARENA_HEIGHT = 540;
@@ -78,7 +78,7 @@ export const skills: Record<string, SkillDefinition> = {
     id: "arcane-orb",
     name: "秘能法球",
     category: "auto",
-    baseElement: "physical",
+    baseElement: "arcane",
     baseDamage: 28,
     cooldown: 0.9,
     radius: 16,
@@ -129,6 +129,7 @@ export const elementPalette: Record<ElementType, string> = {
   fire: "#ff7a45",
   ice: "#80d6ff",
   lightning: "#e4d06a",
+  arcane: "#b48cff",
 };
 
 export const statUpgradePool = [
@@ -193,3 +194,75 @@ export const elementChoices: { element: ElementType; label: string; description:
 ];
 
 export const unlockableSkillIds = ["flame-nova", "frost-lance", "thunder-call"];
+
+export const heroCoreUpgradePool: Record<HeroClass, UpgradeOption[]> = {
+  warrior: [
+    {
+      id: "warrior-cinder-heart",
+      kind: "hero-core",
+      title: "炽心储焰",
+      description: "怒焰上限 +20，点燃阈值 -8，更容易进入爆发窗口。",
+      rarity: "rare",
+    },
+    {
+      id: "warrior-berserk-drive",
+      kind: "hero-core",
+      title: "狂战推进",
+      description: "怒焰爆发持续时间延长，并进一步提高爆发期间的斩击伤害。",
+      rarity: "epic",
+    },
+    {
+      id: "warrior-scorch-guard",
+      kind: "hero-core",
+      title: "灼痕护甲",
+      description: "怒焰衰减变慢，近战命中时额外回复生命，适合贴身压场。",
+      rarity: "rare",
+    },
+  ],
+  ranger: [
+    {
+      id: "ranger-falcon-rhythm",
+      kind: "hero-core",
+      title: "猎鹰节律",
+      description: "动量上限提高，移动蓄势带来的暴击收益更明显。",
+      rarity: "rare",
+    },
+    {
+      id: "ranger-weakpoint-burst",
+      kind: "hero-core",
+      title: "弱点引爆",
+      description: "猎印更快引爆，并提高引爆半径与追加伤害。",
+      rarity: "epic",
+    },
+    {
+      id: "ranger-trail-sight",
+      kind: "hero-core",
+      title: "追迹视界",
+      description: "猎印持续时间更长，保持走位时能更稳定锁定高价值目标。",
+      rarity: "rare",
+    },
+  ],
+  mage: [
+    {
+      id: "mage-prism-memory",
+      kind: "hero-core",
+      title: "棱镜记忆",
+      description: "法印协鸣持续更久，并额外扩大协鸣期间的法术范围。",
+      rarity: "rare",
+    },
+    {
+      id: "mage-spellweave",
+      kind: "hero-core",
+      title: "织印施法",
+      description: "主动施法会额外记录 1 枚同元素法印，更快形成法印矩阵。",
+      rarity: "epic",
+    },
+    {
+      id: "mage-arcane-surge",
+      kind: "hero-core",
+      title: "秘流奔涌",
+      description: "法印协鸣的伤害强化提高，让法球和主动技都更具终结力。",
+      rarity: "rare",
+    },
+  ],
+};

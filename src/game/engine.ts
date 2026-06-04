@@ -1,4 +1,4 @@
-import { ARENA_HEIGHT, ARENA_WIDTH, DEMO_DURATION, elementChoices, elementPalette, heroes, skills, statUpgradePool, unlockableSkillIds } from "@/game/content";
+import { ARENA_HEIGHT, ARENA_WIDTH, DEMO_DURATION, elementChoices, elementPalette, heroCoreUpgradePool, heroes, skills, statUpgradePool, unlockableSkillIds } from "@/game/content";
 import type { ControlState, ElementType, EnemyState, HeroClass, ProjectileState, RunState, RunSummary, UpgradeOption } from "@/game/types";
 
 const PLAYER_RADIUS = 14;
@@ -35,6 +35,16 @@ function getStarterSkill(run: RunState) {
   return getHeroSkill(run, heroes[run.heroId].starterSkillId)!;
 }
 
+function getCurrentCritChance(run: RunState) {
+  if (run.heroId !== "ranger") {
+    return run.player.critChance;
+  }
+
+  const core = run.heroCore.ranger;
+  const momentumBonus = (core.momentum / core.momentumMax) * core.critBonusFromMomentum;
+  return clamp(run.player.critChance + momentumBonus, 0, 0.95);
+}
+
 function getNearestEnemy(run: RunState, x = run.player.x, y = run.player.y) {
   return run.enemies.reduce<EnemyState | null>((closest, enemy) => {
     if (!closest) {
@@ -54,6 +64,123 @@ function addFloatingText(run: RunState, x: number, y: number, value: string, col
     color,
     ttl: 0.55,
   });
+}
+
+function gainWarriorFury(run: RunState, amount: number) {
+  const core = run.heroCore.warrior;
+  core.fury = clamp(core.fury + amount, 0, core.maxFury);
+
+  if (core.fury >= core.maxFury && core.overdriveTimer <= 0) {
+    core.overdriveTimer = core.overdriveDuration;
+    core.fury = Math.round(core.maxFury * 0.45);
+    run.activeAnnouncement = "怒焰爆发，灰烬卫士进入压制状态";
+    spawnAttackEffect(run, {
+      kind: "burst",
+      x: run.player.x,
+      y: run.player.y,
+      ttl: 0.3,
+      maxTtl: 0.3,
+      radius: 92,
+      element: "fire",
+    });
+  }
+}
+
+function gainRangerMomentum(run: RunState, amount: number) {
+  const core = run.heroCore.ranger;
+  core.momentum = clamp(core.momentum + amount, 0, core.momentumMax);
+}
+
+function clearRangerMark(run: RunState) {
+  const core = run.heroCore.ranger;
+  core.markTargetId = null;
+  core.markStacks = 0;
+  core.markTimer = 0;
+}
+
+function detonateRangerMark(run: RunState, enemy: EnemyState, baseDamage: number) {
+  const core = run.heroCore.ranger;
+  spawnAttackEffect(run, {
+    kind: "burst",
+    x: enemy.x,
+    y: enemy.y,
+    ttl: 0.22,
+    maxTtl: 0.22,
+    radius: core.detonationRadius,
+    element: "lightning",
+  });
+
+  run.enemies
+    .filter((candidate) => distance(candidate.x, candidate.y, enemy.x, enemy.y) < core.detonationRadius + candidate.radius)
+    .forEach((candidate) => damageEnemy(run, candidate, baseDamage * (1 + core.detonationDamageBonus), "lightning", candidate.id === enemy.id));
+
+  run.activeAnnouncement = "猎印引爆，星羽游侠完成点杀";
+  addFloatingText(run, enemy.x, enemy.y - 22, "引爆", "#72f3c7");
+  clearRangerMark(run);
+}
+
+function applyRangerMark(run: RunState, enemy: EnemyState, baseDamage: number) {
+  const core = run.heroCore.ranger;
+
+  if (core.markTargetId !== enemy.id) {
+    core.markTargetId = enemy.id;
+    core.markStacks = 0;
+  }
+
+  core.markStacks += 1;
+  core.markTimer = core.markDuration;
+
+  if (core.markStacks >= core.detonationThreshold) {
+    detonateRangerMark(run, enemy, baseDamage);
+  }
+}
+
+function normalizeMageSigil(element: ElementType): ElementType {
+  return element === "physical" ? "arcane" : element;
+}
+
+function triggerMageResonance(run: RunState) {
+  const core = run.heroCore.mage;
+  const sigils = core.sigils.map(normalizeMageSigil);
+  const allSame = sigils.every((element) => element === sigils[0]);
+
+  core.resonanceElement = allSame ? sigils[0] : "arcane";
+  core.resonanceLabel = allSame ? `${sigils[0]} 协鸣` : "棱镜协鸣";
+  core.resonanceTimer = core.resonanceDuration;
+  core.resonancePulseTimer = 0;
+  core.sigils = [];
+  run.activeAnnouncement = allSame ? `法印矩阵成型：${core.resonanceLabel}` : "法印矩阵成型：棱镜协鸣";
+
+  spawnAttackEffect(run, {
+    kind: "burst",
+    x: run.player.x,
+    y: run.player.y,
+    ttl: 0.28,
+    maxTtl: 0.28,
+    radius: allSame ? 86 : 110,
+    element: core.resonanceElement,
+  });
+}
+
+function appendMageSigil(run: RunState, element: ElementType) {
+  const core = run.heroCore.mage;
+  core.sigils.push(normalizeMageSigil(element));
+
+  if (core.sigils.length > core.maxSigils) {
+    core.sigils.splice(0, core.sigils.length - core.maxSigils);
+  }
+
+  if (core.sigils.length >= core.maxSigils) {
+    triggerMageResonance(run);
+  }
+}
+
+function shouldOfferHeroCoreUpgrade(run: RunState) {
+  if (run.player.level <= 3) {
+    return true;
+  }
+
+  return run.player.level % 2 === 1;
 }
 
 function removeEnemy(run: RunState, enemyId: number) {
@@ -98,13 +225,17 @@ function handleEnemyDeath(run: RunState, enemy: EnemyState) {
   gainXp(run, enemy.xpReward);
   addFloatingText(run, enemy.x, enemy.y, "+XP", "#f2de84");
 
+  if (run.heroCore.ranger.markTargetId === enemy.id) {
+    clearRangerMark(run);
+  }
+
   if (run.heroId === "warrior") {
     run.player.hp = Math.min(run.player.maxHp, run.player.hp + 3);
   }
 }
 
 function damageEnemy(run: RunState, enemy: EnemyState, amount: number, element: ElementType, allowArc = true) {
-  const crit = Math.random() < run.player.critChance;
+  const crit = Math.random() < getCurrentCritChance(run);
   const total = amount * (1 + run.player.damageBonus) * (crit ? 1.7 : 1);
   enemy.hp -= total;
   applyElementStatus(enemy, element);
@@ -123,6 +254,8 @@ function damageEnemy(run: RunState, enemy: EnemyState, amount: number, element: 
   if (enemy.hp <= 0) {
     handleEnemyDeath(run, enemy);
   }
+
+  return total;
 }
 
 function damagePlayer(run: RunState, amount: number) {
@@ -160,11 +293,22 @@ function fireStarterSkill(run: RunState) {
     return;
   }
 
-  const damage = definition.baseDamage + starter.level * 8;
-  const radius = definition.radius * (1 + run.player.areaBonus);
+  let damage = definition.baseDamage + starter.level * 8;
+  let radius = definition.radius * (1 + run.player.areaBonus);
   const angle = Math.atan2(target.y - run.player.y, target.x - run.player.x);
 
   if (hero.id === "warrior") {
+    const core = run.heroCore.warrior;
+    if (core.fury >= core.igniteThreshold) {
+      damage *= 1.18;
+      radius *= 1.08;
+    }
+
+    if (core.overdriveTimer > 0) {
+      damage *= 1 + core.burstBonus;
+      radius *= 1.16;
+    }
+
     spawnAttackEffect(run, {
       kind: "slash",
       x: run.player.x,
@@ -176,12 +320,27 @@ function fireStarterSkill(run: RunState) {
       element: starter.element,
     });
 
+    let hits = 0;
     run.enemies
       .filter((enemy) => distance(enemy.x, enemy.y, run.player.x, run.player.y) < radius + enemy.radius)
-      .forEach((enemy) => damageEnemy(run, enemy, damage, starter.element));
+      .forEach((enemy) => {
+        hits += 1;
+        damageEnemy(run, enemy, damage, starter.element);
+        if (core.healOnHit > 0) {
+          run.player.hp = Math.min(run.player.maxHp, run.player.hp + core.healOnHit);
+        }
+      });
+
+    if (hits > 0) {
+      gainWarriorFury(run, 12 + hits * 8);
+    }
   }
 
   if (hero.id === "ranger") {
+    const momentumRatio = run.heroCore.ranger.momentum / run.heroCore.ranger.momentumMax;
+    damage *= 1 + momentumRatio * 0.12;
+    gainRangerMomentum(run, 4);
+
     spawnProjectile(run, {
       source: "hero",
       skillId: starter.id,
@@ -198,6 +357,13 @@ function fireStarterSkill(run: RunState) {
   }
 
   if (hero.id === "mage") {
+    const core = run.heroCore.mage;
+    if (core.resonanceTimer > 0) {
+      damage *= 1 + core.resonanceDamageBonus;
+      radius *= 1 + core.resonanceAreaBonus;
+    }
+
+    appendMageSigil(run, starter.element);
     spawnProjectile(run, {
       source: "hero",
       skillId: starter.id,
@@ -208,7 +374,7 @@ function fireStarterSkill(run: RunState) {
       radius,
       damage,
       ttl: definition.duration,
-      pierce: 0,
+      pierce: core.resonanceTimer > 0 ? 1 : 0,
       element: starter.element,
     });
   }
@@ -223,7 +389,15 @@ function castActiveSkills(run: RunState) {
 
   activeSkills.forEach((ownedSkill) => {
     const definition = skills[ownedSkill.id];
-    const damage = definition.baseDamage + ownedSkill.level * 9;
+    let damage = definition.baseDamage + ownedSkill.level * 9;
+
+    if (run.heroId === "warrior" && run.heroCore.warrior.overdriveTimer > 0) {
+      damage *= 1 + run.heroCore.warrior.burstBonus;
+    }
+
+    if (run.heroId === "mage" && run.heroCore.mage.resonanceTimer > 0) {
+      damage *= 1 + run.heroCore.mage.resonanceDamageBonus;
+    }
 
     if (ownedSkill.id === "flame-nova") {
       spawnAttackEffect(run, {
@@ -292,6 +466,12 @@ function castActiveSkills(run: RunState) {
           damageEnemy(run, enemy, damage, "lightning");
         });
     }
+
+    if (run.heroId === "mage") {
+      for (let index = 0; index < 1 + run.heroCore.mage.bonusSigilsOnActiveCast; index += 1) {
+        appendMageSigil(run, definition.baseElement);
+      }
+    }
   });
 
   run.player.castCooldown = Math.min(...activeSkills.map((skill) => skills[skill.id].cooldown));
@@ -343,6 +523,11 @@ function updateProjectiles(run: RunState, dt: number) {
         if (projectile.ttl > 0 && distance(projectile.x, projectile.y, enemy.x, enemy.y) < enemy.radius + projectile.radius) {
           damageEnemy(run, enemy, projectile.damage, projectile.element);
 
+          if (run.heroId === "ranger" && projectile.skillId === "ricochet-shot" && enemy.hp > 0) {
+            gainRangerMomentum(run, 7);
+            applyRangerMark(run, enemy, projectile.damage);
+          }
+
           if (projectile.skillId === "arcane-orb") {
             run.enemies
               .filter((candidate) => candidate.id !== enemy.id && distance(candidate.x, candidate.y, enemy.x, enemy.y) < 54 + run.player.areaBonus * 38)
@@ -362,6 +547,7 @@ function updateProjectiles(run: RunState, dt: number) {
 export function buildUpgradeOptions(run: RunState): UpgradeOption[] {
   const ownedIds = new Set(run.ownedSkills.map((skill) => skill.id));
   const options: UpgradeOption[] = [];
+  const heroCoreOptions = heroCoreUpgradePool[run.heroId].filter((option) => !run.takenHeroCoreUpgrades.includes(option.id));
 
   unlockableSkillIds
     .filter((skillId) => !ownedIds.has(skillId))
@@ -400,8 +586,15 @@ export function buildUpgradeOptions(run: RunState): UpgradeOption[] {
   });
 
   statUpgradePool.forEach((stat) => options.push(stat));
+  const picks: UpgradeOption[] = [];
 
-  return randomPick(options, 3);
+  if (heroCoreOptions.length > 0 && shouldOfferHeroCoreUpgrade(run)) {
+    picks.push(...randomPick(heroCoreOptions, 1));
+  }
+
+  const remainingOptions = options.filter((option) => !picks.some((picked) => picked.id === option.id));
+  picks.push(...randomPick(remainingOptions, 3 - picks.length));
+  return picks;
 }
 
 export function createInitialRun(heroId: HeroClass): RunState {
@@ -431,6 +624,44 @@ export function createInitialRun(heroId: HeroClass): RunState {
     projectiles: [],
     attackEffects: [],
     ownedSkills: [{ id: hero.starterSkillId, level: 1, element: skills[hero.starterSkillId].baseElement }],
+    heroCore: {
+      warrior: {
+        fury: 0,
+        maxFury: 80,
+        igniteThreshold: 54,
+        overdriveTimer: 0,
+        overdriveDuration: 2.6,
+        furyDecayRate: 7,
+        burstBonus: 0.28,
+        healOnHit: 0,
+      },
+      ranger: {
+        momentum: 0,
+        momentumMax: 100,
+        critBonusFromMomentum: 0.14,
+        markTargetId: null,
+        markStacks: 0,
+        markTimer: 0,
+        markDuration: 2.6,
+        detonationThreshold: 3,
+        detonationDamageBonus: 0.6,
+        detonationRadius: 88,
+      },
+      mage: {
+        sigils: [],
+        maxSigils: 3,
+        resonanceTimer: 0,
+        resonanceDuration: 4,
+        resonancePulseTimer: 0,
+        resonancePulseInterval: 0.45,
+        resonanceLabel: "",
+        resonanceElement: "arcane",
+        resonanceDamageBonus: 0.24,
+        resonanceAreaBonus: 0.18,
+        bonusSigilsOnActiveCast: 0,
+      },
+    },
+    takenHeroCoreUpgrades: [],
     upgrades: [],
     floatingTexts: [],
     stats: { kills: 0, damageDone: 0, peakDps: 0 },
@@ -468,9 +699,52 @@ export function updateRunState(run: RunState, controls: ControlState, dt: number
   const horizontal = (controls.right ? 1 : 0) - (controls.left ? 1 : 0);
   const vertical = (controls.down ? 1 : 0) - (controls.up ? 1 : 0);
   const moving = Math.hypot(horizontal, vertical) || 1;
+  const isMoving = horizontal !== 0 || vertical !== 0;
   const moveBonus = run.heroId === "ranger" && (horizontal !== 0 || vertical !== 0) ? 1.08 : 1;
   run.player.x = clamp(run.player.x + (horizontal / moving) * run.player.moveSpeed * moveBonus * dt, 24, ARENA_WIDTH - 24);
   run.player.y = clamp(run.player.y + (vertical / moving) * run.player.moveSpeed * moveBonus * dt, 24, ARENA_HEIGHT - 24);
+
+  if (run.heroId === "warrior") {
+    const core = run.heroCore.warrior;
+    core.overdriveTimer = Math.max(0, core.overdriveTimer - dt);
+    if (core.overdriveTimer <= 0) {
+      core.fury = Math.max(0, core.fury - core.furyDecayRate * dt);
+    }
+  }
+
+  if (run.heroId === "ranger") {
+    const core = run.heroCore.ranger;
+    gainRangerMomentum(run, (isMoving ? 58 : core.markTargetId ? -10 : -18) * dt);
+    core.markTimer = Math.max(0, core.markTimer - dt);
+    if (core.markTimer <= 0) {
+      clearRangerMark(run);
+    }
+  }
+
+  if (run.heroId === "mage") {
+    const core = run.heroCore.mage;
+    core.resonanceTimer = Math.max(0, core.resonanceTimer - dt);
+    core.resonancePulseTimer = Math.max(0, core.resonancePulseTimer - dt);
+
+    if (core.resonanceTimer > 0 && core.resonancePulseTimer <= 0) {
+      spawnAttackEffect(run, {
+        kind: "burst",
+        x: run.player.x,
+        y: run.player.y,
+        ttl: 0.2,
+        maxTtl: 0.2,
+        radius: 78 + (1 - core.resonanceTimer / core.resonanceDuration) * 26,
+        element: core.resonanceElement,
+      });
+      core.resonancePulseTimer = core.resonancePulseInterval;
+    }
+
+    if (core.resonanceTimer <= 0) {
+      core.resonancePulseTimer = 0;
+      core.resonanceLabel = "";
+      core.resonanceElement = "arcane";
+    }
+  }
 
   if (run.spawnTimer <= 0) {
     spawnEnemy(run);
@@ -579,6 +853,47 @@ export function applyUpgrade(run: RunState, option: UpgradeOption) {
     }
     if (option.id === "stat-precision") {
       run.player.critChance += option.value ?? 0;
+    }
+  }
+
+  if (option.kind === "hero-core") {
+    run.takenHeroCoreUpgrades.push(option.id);
+
+    if (option.id === "warrior-cinder-heart") {
+      run.heroCore.warrior.maxFury += 20;
+      run.heroCore.warrior.igniteThreshold = Math.max(24, run.heroCore.warrior.igniteThreshold - 8);
+    }
+    if (option.id === "warrior-berserk-drive") {
+      run.heroCore.warrior.overdriveDuration += 1;
+      run.heroCore.warrior.burstBonus += 0.16;
+    }
+    if (option.id === "warrior-scorch-guard") {
+      run.heroCore.warrior.furyDecayRate *= 0.72;
+      run.heroCore.warrior.healOnHit += 1.5;
+    }
+
+    if (option.id === "ranger-falcon-rhythm") {
+      run.heroCore.ranger.momentumMax += 25;
+      run.heroCore.ranger.critBonusFromMomentum += 0.08;
+    }
+    if (option.id === "ranger-weakpoint-burst") {
+      run.heroCore.ranger.detonationThreshold = Math.max(2, run.heroCore.ranger.detonationThreshold - 1);
+      run.heroCore.ranger.detonationRadius += 18;
+      run.heroCore.ranger.detonationDamageBonus += 0.28;
+    }
+    if (option.id === "ranger-trail-sight") {
+      run.heroCore.ranger.markDuration += 1;
+    }
+
+    if (option.id === "mage-prism-memory") {
+      run.heroCore.mage.resonanceDuration += 1.2;
+      run.heroCore.mage.resonanceAreaBonus += 0.08;
+    }
+    if (option.id === "mage-spellweave") {
+      run.heroCore.mage.bonusSigilsOnActiveCast += 1;
+    }
+    if (option.id === "mage-arcane-surge") {
+      run.heroCore.mage.resonanceDamageBonus += 0.18;
     }
   }
 
