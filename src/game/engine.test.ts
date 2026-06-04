@@ -60,6 +60,8 @@ describe("game engine", () => {
     const upgrades = buildUpgradeOptions(run);
 
     expect(upgrades.some((option) => option.kind === "hero-core")).toBe(true);
+    expect(upgrades.some((option) => option.kind === "stat-mod")).toBe(true);
+    expect(upgrades.some((option) => ["new-skill", "skill-up", "element-mod"].includes(option.kind))).toBe(true);
   });
 
   it("does not force a hero core upgrade on later even levels", () => {
@@ -141,6 +143,22 @@ describe("game engine", () => {
     );
 
     expect(run.attackEffects.some((effect) => effect.kind === "burst" && effect.element === "arcane")).toBe(true);
+  });
+
+  it("mage does not rebuild sigils during active resonance", () => {
+    const run = createInitialRun("mage");
+    run.heroCore.mage.resonanceTimer = 2;
+    run.heroCore.mage.sigils = [];
+    run.enemies.push(createDummyEnemy(run.player.x + 120, run.player.y));
+    run.player.attackCooldown = 0;
+
+    updateRunState(
+      run,
+      { up: false, down: false, left: false, right: false, cast: false },
+      0.016,
+    );
+
+    expect(run.heroCore.mage.sigils).toHaveLength(0);
   });
 
   it("creates visible attack effects for learned active skills", () => {

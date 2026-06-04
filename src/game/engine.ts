@@ -164,6 +164,11 @@ function triggerMageResonance(run: RunState) {
 
 function appendMageSigil(run: RunState, element: ElementType) {
   const core = run.heroCore.mage;
+
+  if (core.resonanceTimer > 0) {
+    return;
+  }
+
   core.sigils.push(normalizeMageSigil(element));
 
   if (core.sigils.length > core.maxSigils) {
@@ -332,7 +337,7 @@ function fireStarterSkill(run: RunState) {
       });
 
     if (hits > 0) {
-      gainWarriorFury(run, 12 + hits * 8);
+      gainWarriorFury(run, 9 + hits * 6);
     }
   }
 
@@ -587,9 +592,19 @@ export function buildUpgradeOptions(run: RunState): UpgradeOption[] {
 
   statUpgradePool.forEach((stat) => options.push(stat));
   const picks: UpgradeOption[] = [];
+  const buildOptions = options.filter((option) => option.kind === "new-skill" || option.kind === "skill-up" || option.kind === "element-mod");
+  const statOptions = options.filter((option) => option.kind === "stat-mod");
 
   if (heroCoreOptions.length > 0 && shouldOfferHeroCoreUpgrade(run)) {
     picks.push(...randomPick(heroCoreOptions, 1));
+  }
+
+  if (picks.some((option) => option.kind === "hero-core")) {
+    const preferredBuild = randomPick(buildOptions.filter((option) => !picks.some((picked) => picked.id === option.id)), 1);
+    picks.push(...preferredBuild);
+
+    const preferredStat = randomPick(statOptions.filter((option) => !picks.some((picked) => picked.id === option.id)), 1);
+    picks.push(...preferredStat);
   }
 
   const remainingOptions = options.filter((option) => !picks.some((picked) => picked.id === option.id));
