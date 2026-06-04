@@ -14,6 +14,16 @@ const iconMap = {
   "element-mod": Gem,
   "stat-mod": Gem,
   "hero-core": Sparkles,
+  affix: Gem,
+} as const;
+
+const kindLabel = {
+  "new-skill": "技能",
+  "skill-up": "技能强化",
+  "element-mod": "元素修饰",
+  "stat-mod": "通用成长",
+  "hero-core": "职业核心",
+  affix: "词缀",
 } as const;
 
 interface UpgradePanelProps {
@@ -55,7 +65,10 @@ export function UpgradePanel({ options, onChoose }: UpgradePanelProps) {
                 </div>
                 <h4 className="mt-6 font-display text-xl text-white">{option.title}</h4>
                 <p className="mt-3 text-sm leading-6 text-slate-300">{option.description}</p>
-                <div className="mt-4 text-[10px] uppercase tracking-[0.35em] text-slate-400">{option.rarity}</div>
+                <div className="mt-4 flex items-center justify-between text-[10px] uppercase tracking-[0.28em] text-slate-400">
+                  <span>{kindLabel[option.kind]}</span>
+                  <span>{option.rarity}</span>
+                </div>
               </button>
             );
           })}

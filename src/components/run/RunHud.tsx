@@ -1,5 +1,5 @@
 import { Bolt, Heart, Layers3, Sparkles } from "lucide-react";
-import { skills } from "@/game/content";
+import { affixPool, relicPool, skills } from "@/game/content";
 import type { RunSnapshot } from "@/game/types";
 
 interface RunHudProps {
@@ -60,6 +60,14 @@ function buildHeroCorePanel(snapshot: RunSnapshot) {
 export function RunHud({ snapshot }: RunHudProps) {
   const xpProgress = (snapshot.player.xp / snapshot.player.xpToNext) * 100;
   const heroCorePanel = buildHeroCorePanel(snapshot);
+  const highlightedAffixes = snapshot.buildState.affixes
+    .map((ownedAffix) => affixPool.find((affix) => affix.id === ownedAffix.id))
+    .filter((affix) => affix !== undefined)
+    .slice(0, 3);
+  const highlightedRelics = snapshot.relics
+    .map((ownedRelic) => relicPool.find((relic) => relic.id === ownedRelic.id))
+    .filter((relic) => relic !== undefined)
+    .slice(0, 3);
 
   return (
     <div className="space-y-4">
@@ -132,6 +140,40 @@ export function RunHud({ snapshot }: RunHudProps) {
               </div>
             </div>
           ))}
+          <div className="rounded-2xl border border-white/8 bg-white/5 px-3 py-3">
+            <div className="flex items-center justify-between text-sm text-white">
+              <span>核心词缀</span>
+              <span className="text-xs text-slate-400">{snapshot.buildState.affixes.length} 项</span>
+            </div>
+            <div className="mt-3 space-y-2 text-xs text-slate-400">
+              {highlightedAffixes.length > 0 ? (
+                highlightedAffixes.map((affix) => (
+                  <p key={affix.id}>
+                    {affix.name}：{affix.description}
+                  </p>
+                ))
+              ) : (
+                <p>尚未获得通用词缀，优先关注弹射、冷却或范围方向。</p>
+              )}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-white/5 px-3 py-3">
+            <div className="flex items-center justify-between text-sm text-white">
+              <span>本局遗物</span>
+              <span className="text-xs text-slate-400">{snapshot.relics.length} 件</span>
+            </div>
+            <div className="mt-3 space-y-2 text-xs text-slate-400">
+              {highlightedRelics.length > 0 ? (
+                highlightedRelics.map((relic) => (
+                  <p key={relic.id}>
+                    {relic.name}：{relic.summary}
+                  </p>
+                ))
+              ) : (
+                <p>遗物会在中局阶段触发，决定这一局后半段的主打法。</p>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 

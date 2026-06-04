@@ -88,6 +88,48 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
         context.fill();
       }
 
+      if (effect.kind === "steam" && effect.radius) {
+        context.strokeStyle = "rgba(214, 238, 255, 0.85)";
+        context.lineWidth = 8;
+        context.beginPath();
+        context.arc(effect.x, effect.y, effect.radius * (1 - progress * 0.3), 0, Math.PI * 2);
+        context.stroke();
+        context.strokeStyle = "rgba(128, 214, 255, 0.65)";
+        context.lineWidth = 4;
+        context.beginPath();
+        context.arc(effect.x, effect.y, effect.radius * 0.66, 0, Math.PI * 2);
+        context.stroke();
+      }
+
+      if (effect.kind === "shatter" && effect.radius) {
+        context.strokeStyle = "rgba(228, 208, 106, 0.9)";
+        context.lineWidth = 4;
+        context.beginPath();
+        context.moveTo(effect.x - effect.radius * 0.22, effect.y - effect.radius * 0.22);
+        context.lineTo(effect.x + effect.radius * 0.16, effect.y + effect.radius * 0.12);
+        context.lineTo(effect.x - effect.radius * 0.06, effect.y + effect.radius * 0.26);
+        context.stroke();
+        context.strokeStyle = "rgba(128, 214, 255, 0.8)";
+        context.lineWidth = 3;
+        context.beginPath();
+        context.moveTo(effect.x + effect.radius * 0.08, effect.y - effect.radius * 0.24);
+        context.lineTo(effect.x - effect.radius * 0.18, effect.y + effect.radius * 0.02);
+        context.lineTo(effect.x + effect.radius * 0.24, effect.y + effect.radius * 0.24);
+        context.stroke();
+      }
+
+      if (effect.kind === "melt" && effect.radius) {
+        context.strokeStyle = "rgba(255, 122, 69, 0.85)";
+        context.lineWidth = 4;
+        context.strokeRect(effect.x - effect.radius, effect.y - effect.radius, effect.radius * 2, effect.radius * 2);
+        context.strokeStyle = "rgba(255, 188, 120, 0.72)";
+        context.beginPath();
+        context.moveTo(effect.x - effect.radius * 0.6, effect.y - effect.radius * 0.55);
+        context.lineTo(effect.x - effect.radius * 0.12, effect.y + effect.radius * 0.08);
+        context.lineTo(effect.x + effect.radius * 0.52, effect.y + effect.radius * 0.5);
+        context.stroke();
+      }
+
       context.restore();
     });
 
@@ -109,6 +151,10 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
         context.fillRect(-2, -2, 20, 4);
         context.fillStyle = "#ffffff";
         context.fillRect(10, -3, 8, 6);
+        if (projectile.splitGeneration !== undefined) {
+          context.fillStyle = "#f8b4ff";
+          context.fillRect(-6, -2, 4, 4);
+        }
       }
 
       if (projectile.source === "hero" && projectile.skillId === "arcane-orb") {
@@ -127,6 +173,33 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
         context.fillRect(14, -6, 10, 12);
       }
 
+      if (projectile.source === "hero" && projectile.skillId === "seeker-blades") {
+        const angle = Math.atan2(projectile.vy, projectile.vx);
+        context.rotate(angle);
+        context.fillStyle = elementPalette[projectile.element];
+        context.fillRect(-3, -3, 18, 6);
+        context.fillStyle = "#ffffff";
+        context.fillRect(10, -2, 8, 4);
+        if (projectile.splitGeneration !== undefined) {
+          context.fillStyle = "#f8b4ff";
+          context.fillRect(-8, -2, 4, 4);
+        }
+      }
+
+      if (projectile.source === "hero" && projectile.skillId === "orbit-sigil") {
+        context.fillStyle = elementPalette[projectile.element];
+        context.fillRect(-9, -9, 18, 18);
+        context.fillStyle = "#ffffff";
+        context.fillRect(-3, -3, 6, 6);
+      }
+
+      if (projectile.source === "hero" && projectile.skillId === "lure-mine") {
+        context.fillStyle = elementPalette[projectile.element];
+        context.fillRect(-10, -10, 20, 20);
+        context.fillStyle = "#1b1024";
+        context.fillRect(-4, -4, 8, 8);
+      }
+
       context.restore();
     });
 
@@ -138,6 +211,24 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
       context.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, enemy.radius * 2, 4);
       context.fillStyle = "#fe7272";
       context.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, (enemy.hp / enemy.maxHp) * enemy.radius * 2, 4);
+
+      if (enemy.status.elementState?.element === "fire") {
+        context.strokeStyle = "rgba(255, 122, 69, 0.8)";
+        context.lineWidth = 2;
+        context.strokeRect(enemy.x - enemy.radius - 3, enemy.y - enemy.radius - 3, enemy.radius * 2 + 6, enemy.radius * 2 + 6);
+      }
+
+      if (enemy.status.elementState?.element === "ice") {
+        context.strokeStyle = "rgba(128, 214, 255, 0.85)";
+        context.lineWidth = 2;
+        context.strokeRect(enemy.x - enemy.radius - 3, enemy.y - enemy.radius - 3, enemy.radius * 2 + 6, enemy.radius * 2 + 6);
+      }
+
+      if (enemy.status.meltedTimer > 0) {
+        context.strokeStyle = "rgba(255, 180, 102, 0.95)";
+        context.lineWidth = 3;
+        context.strokeRect(enemy.x - enemy.radius - 6, enemy.y - enemy.radius - 6, enemy.radius * 2 + 12, enemy.radius * 2 + 12);
+      }
 
       if (snapshot.heroId === "ranger" && snapshot.heroCore.ranger.markTargetId === enemy.id) {
         context.strokeStyle = "#72f3c7";
@@ -162,6 +253,36 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
         context.stroke();
         context.restore();
       }
+    }
+
+    if (snapshot.buildState.relicCloseRangeActive) {
+      context.save();
+      context.strokeStyle = "rgba(255, 122, 69, 0.7)";
+      context.lineWidth = 4;
+      context.beginPath();
+      context.arc(snapshot.player.x, snapshot.player.y, 32, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
+    }
+
+    if (snapshot.buildState.relicElementFocus) {
+      context.save();
+      context.strokeStyle = `${elementPalette[snapshot.buildState.relicElementFocus]}99`;
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(snapshot.player.x, snapshot.player.y, 38, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
+    }
+
+    if (snapshot.buildState.relicStationaryCharge > 0.08) {
+      context.save();
+      context.strokeStyle = `rgba(180, 140, 255, ${0.18 + snapshot.buildState.relicStationaryCharge * 0.45})`;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.arc(snapshot.player.x, snapshot.player.y, 48 + snapshot.buildState.relicStationaryCharge * 10, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
     }
 
     if (snapshot.heroId === "ranger") {
@@ -239,7 +360,7 @@ export function CanvasArena({ snapshot }: CanvasArenaProps) {
       context.fillText(text.value, text.x, text.y);
     });
 
-    if (snapshot.mode === "levelup") {
+    if (snapshot.mode === "levelup" || snapshot.mode === "relic-choice") {
       context.fillStyle = "rgba(4, 8, 18, 0.55)";
       context.fillRect(0, 0, ARENA_WIDTH, ARENA_HEIGHT);
     }

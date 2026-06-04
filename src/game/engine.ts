@@ -1,5 +1,5 @@
-import { ARENA_HEIGHT, ARENA_WIDTH, DEMO_DURATION, elementChoices, elementPalette, heroCoreUpgradePool, heroes, skills, statUpgradePool, unlockableSkillIds } from "@/game/content";
-import type { ControlState, ElementType, EnemyState, HeroClass, ProjectileState, RunState, RunSummary, UpgradeOption } from "@/game/types";
+import { ARENA_HEIGHT, ARENA_WIDTH, DEMO_DURATION, affixPool, elementChoices, elementPalette, heroCoreUpgradePool, heroes, reactionTable, relicPool, skills, statUpgradePool, unlockableSkillIds } from "@/game/content";
+import type { ControlState, ElementState, ElementType, EnemyState, HeroClass, ProjectileState, ReactionDefinition, RelicDefinition, RunState, RunSummary, UpgradeOption } from "@/game/types";
 
 const PLAYER_RADIUS = 14;
 
@@ -35,6 +35,55 @@ function getStarterSkill(run: RunState) {
   return getHeroSkill(run, heroes[run.heroId].starterSkillId)!;
 }
 
+function hasRelic(run: RunState, relicId: string) {
+  return run.relics.some((relic) => relic.id === relicId);
+}
+
+function getActiveSkills(run: RunState) {
+  return run.ownedSkills.filter((skill) => skills[skill.id].category === "active");
+}
+
+function getDominantElement(run: RunState): ElementType | undefined {
+  const tally = new Map<ElementType, number>();
+
+  run.ownedSkills.forEach((skill) => {
+    if (skill.element === "physical" || skill.element === "arcane") {
+      return;
+    }
+
+    tally.set(skill.element, (tally.get(skill.element) ?? 0) + skill.level);
+  });
+
+  let selected: ElementType | undefined;
+  let selectedValue = 0;
+  tally.forEach((value, element) => {
+    if (value > selectedValue) {
+      selected = element;
+      selectedValue = value;
+    }
+  });
+
+  return selected;
+}
+
+function getNearestEnemyDistance(run: RunState) {
+  const nearestEnemy = getNearestEnemy(run);
+  if (!nearestEnemy) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return distance(run.player.x, run.player.y, nearestEnemy.x, nearestEnemy.y) - nearestEnemy.radius;
+}
+
+function getCastCooldown(run: RunState) {
+  const activeSkills = getActiveSkills(run);
+  if (activeSkills.length === 0) {
+    return 0;
+  }
+
+  return Math.min(...activeSkills.map((skill) => skills[skill.id].cooldown)) * run.buildState.activeCooldownMultiplier;
+}
+
 function getCurrentCritChance(run: RunState) {
   if (run.heroId !== "ranger") {
     return run.player.critChance;
@@ -64,6 +113,10 @@ function addFloatingText(run: RunState, x: number, y: number, value: string, col
     color,
     ttl: 0.55,
   });
+}
+
+function reduceCastCooldown(run: RunState, amount: number) {
+  run.player.castCooldown = Math.max(0, run.player.castCooldown - amount);
 }
 
 function gainWarriorFury(run: RunState, amount: number) {
@@ -188,6 +241,155 @@ function shouldOfferHeroCoreUpgrade(run: RunState) {
   return run.player.level % 2 === 1;
 }
 
+function isProjectileSkillId(skillId: string) {
+  return skillId === "ricochet-shot" || skillId === "arcane-orb" || skills[skillId]?.tags?.includes("projectile");
+}
+
+function isRelicEligible(run: RunState, relic: RelicDefinition) {
+  if (hasRelic(run, relic.id)) {
+    return false;
+  }
+
+  if (relic.id === "relic-overload-codex") {
+    return getActiveSkills(run).length > 0;
+  }
+
+  if (relic.id === "relic-split-plume") {
+    return run.ownedSkills.some((skill) => isProjectileSkillId(skill.id));
+  }
+
+  if (relic.id === "relic-element-vessel") {
+    return getDominantElement(run) !== undefined;
+  }
+
+  return true;
+}
+
+function relicSupportsCurrentBuild(run: RunState, relic: RelicDefinition) {
+  if (relic.focusSkillIds?.some((skillId) => run.ownedSkills.some((ownedSkill) => ownedSkill.id === skillId))) {
+    return true;
+  }
+
+  if (relic.focusElements?.some((element) => getDominantElement(run) === element)) {
+    return true;
+  }
+
+  if (relic.id === "relic-hunt-signet") {
+    return true;
+  }
+
+  return false;
+}
+
+export function buildRelicOptions(run: RunState): RelicDefinition[] {
+  const candidates = relicPool.filter((relic) => isRelicEligible(run, relic));
+  const supporting = candidates.filter((relic) => relicSupportsCurrentBuild(run, relic));
+  const neutral = candidates.filter((relic) => !supporting.some((supported) => supported.id === relic.id));
+  const picks: RelicDefinition[] = [];
+
+  picks.push(...randomPick(supporting, 1));
+  picks.push(...randomPick(neutral.filter((relic) => !picks.some((picked) => picked.id === relic.id)), 1));
+
+  const remaining = candidates.filter((relic) => !picks.some((picked) => picked.id === relic.id));
+  picks.push(...randomPick(remaining, 3 - picks.length));
+  return picks;
+}
+
+function shouldTriggerRelicChoice(run: RunState) {
+  return run.relicChoiceCount < 2 && run.pendingRelicChoices.length === 0 && run.time >= run.nextRelicTime;
+}
+
+function triggerRelicChoice(run: RunState) {
+  const options = buildRelicOptions(run);
+  if (options.length === 0) {
+    run.relicChoiceCount = 2;
+    run.nextRelicTime = Number.POSITIVE_INFINITY;
+    return;
+  }
+
+  run.pendingRelicChoices = options;
+  run.mode = "relic-choice";
+  run.activeAnnouncement = "遗物抉择，选择一件中局转折器";
+}
+
+function updateRelicMomentum(run: RunState, isMoving: boolean, dt: number) {
+  run.buildState.relicStationaryCharge = isMoving
+    ? Math.max(0, run.buildState.relicStationaryCharge - dt * 2.6)
+    : Math.min(1, run.buildState.relicStationaryCharge + dt * 1.4);
+
+  const nearestEnemyDistance = getNearestEnemyDistance(run);
+  run.buildState.relicCloseRangeActive = nearestEnemyDistance <= run.buildState.relicCloseRangeRadius;
+
+  if (hasRelic(run, "relic-forge-emblem")) {
+    run.buildState.relicCloseRangeActive = run.buildState.relicCloseRangeActive && run.enemies.length > 0;
+  } else {
+    run.buildState.relicCloseRangeActive = false;
+  }
+}
+
+function getStationaryBonus(run: RunState) {
+  return hasRelic(run, "relic-star-chart") ? run.buildState.relicStationaryBonus * run.buildState.relicStationaryCharge : 0;
+}
+
+function getElementRelicMultiplier(run: RunState, element: ElementType) {
+  return run.buildState.relicElementFocus === element ? 1 + run.buildState.relicElementBonus : 1;
+}
+
+function createElementState(element: "fire" | "ice", timer: number): ElementState {
+  return {
+    element,
+    timer,
+    reactionLockTimer: 0.14,
+  };
+}
+
+function getReactionDefinition(baseElement: "fire" | "ice", triggerElement: ElementType) {
+  return reactionTable.find((reaction) => reaction.baseElement === baseElement && reaction.triggerElement === triggerElement);
+}
+
+function spawnSplitShots(run: RunState, projectile: ProjectileState, enemy: EnemyState) {
+  if (
+    run.buildState.relicProjectileSplitCount <= 0
+    || projectile.source !== "hero"
+    || projectile.splitGeneration !== undefined
+    || projectile.anchorToPlayer
+    || projectile.explodeOnExpire
+  ) {
+    return;
+  }
+
+  const splitTargets = run.enemies
+    .filter((candidate) => candidate.id !== enemy.id && candidate.hp > 0)
+    .sort((left, right) => distance(left.x, left.y, enemy.x, enemy.y) - distance(right.x, right.y, enemy.x, enemy.y))
+    .slice(0, run.buildState.relicProjectileSplitCount);
+
+  const fallbackAngles = [-0.35, 0.35];
+
+  for (let index = 0; index < run.buildState.relicProjectileSplitCount; index += 1) {
+    const target = splitTargets[index];
+    const baseAngle = Math.atan2(projectile.vy, projectile.vx);
+    const angle = target
+      ? Math.atan2(target.y - enemy.y, target.x - enemy.x)
+      : baseAngle + fallbackAngles[index % fallbackAngles.length];
+    const speed = Math.hypot(projectile.vx, projectile.vy) || skills[projectile.skillId]?.projectileSpeed || 220;
+
+    spawnProjectile(run, {
+      source: "hero",
+      skillId: projectile.skillId,
+      x: enemy.x,
+      y: enemy.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      radius: Math.max(6, projectile.radius * 0.82),
+      damage: projectile.damage * run.buildState.relicProjectileSplitDamageMultiplier,
+      ttl: Math.max(0.45, projectile.ttl),
+      pierce: 0,
+      element: projectile.element,
+      splitGeneration: 1,
+    });
+  }
+}
+
 function removeEnemy(run: RunState, enemyId: number) {
   run.enemies = run.enemies.filter((enemy) => enemy.id !== enemyId);
 }
@@ -210,18 +412,151 @@ function gainXp(run: RunState, amount: number) {
   }
 }
 
-function applyElementStatus(enemy: EnemyState, element: ElementType) {
+function applyElementBaseStatus(run: RunState, enemy: EnemyState, element: ElementType) {
   if (element === "fire") {
-    enemy.status.burnTimer = 2.2;
+    const timer = 2.2 + run.buildState.burnDurationBonus + (run.buildState.relicElementFocus === "fire" ? 0.9 : 0);
+    enemy.status.burnTimer = timer;
+    enemy.status.elementState = createElementState("fire", timer);
   }
 
   if (element === "ice") {
-    enemy.status.slowTimer = 1.8;
+    const timer = 1.8 + (run.buildState.relicElementFocus === "ice" ? 0.45 : 0);
+    enemy.status.slowTimer = timer;
+    enemy.status.elementState = createElementState("ice", timer);
   }
 
   if (element === "lightning") {
     enemy.status.shockTimer = 0.35;
   }
+}
+
+function triggerReactionEffect(run: RunState, enemy: EnemyState, reaction: ReactionDefinition, damage: number) {
+  if (reaction.id === "overload-burst") {
+    spawnAttackEffect(run, {
+      kind: "burst",
+      x: enemy.x,
+      y: enemy.y,
+      ttl: 0.24,
+      maxTtl: 0.24,
+      radius: reaction.radius,
+      element: "fire",
+    });
+    run.enemies
+      .filter((candidate) => distance(candidate.x, candidate.y, enemy.x, enemy.y) < reaction.radius + candidate.radius)
+      .forEach((candidate) => damageEnemy(run, candidate, damage * reaction.damageMultiplier, "fire", false, false));
+  }
+
+  if (reaction.id === "steam-shock") {
+    spawnAttackEffect(run, {
+      kind: "steam",
+      x: enemy.x,
+      y: enemy.y,
+      ttl: 0.28,
+      maxTtl: 0.28,
+      radius: reaction.radius,
+      element: "ice",
+    });
+    run.enemies
+      .filter((candidate) => distance(candidate.x, candidate.y, enemy.x, enemy.y) < reaction.radius + candidate.radius)
+      .forEach((candidate) => {
+        damageEnemy(run, candidate, damage * reaction.damageMultiplier, "ice", false, false);
+        candidate.status.slowTimer = Math.max(candidate.status.slowTimer, 0.9);
+      });
+  }
+
+  if (reaction.id === "conductive-shatter") {
+    spawnAttackEffect(run, {
+      kind: "shatter",
+      x: enemy.x,
+      y: enemy.y,
+      ttl: 0.24,
+      maxTtl: 0.24,
+      radius: reaction.radius,
+      element: "lightning",
+    });
+    const nearby = run.enemies
+      .filter((candidate) => candidate.id !== enemy.id && distance(candidate.x, candidate.y, enemy.x, enemy.y) < reaction.radius)
+      .slice(0, reaction.chainCount ?? 2);
+
+    nearby.forEach((candidate) => {
+      spawnAttackEffect(run, {
+        kind: "lightning",
+        x: enemy.x,
+        y: enemy.y,
+        ttl: 0.18,
+        maxTtl: 0.18,
+        element: "lightning",
+        targetX: candidate.x,
+        targetY: candidate.y,
+      });
+      damageEnemy(run, candidate, damage * (reaction.chainDamageMultiplier ?? 0.4), "lightning", false, false);
+    });
+  }
+
+  if (reaction.id === "melt-pierce") {
+    spawnAttackEffect(run, {
+      kind: "melt",
+      x: enemy.x,
+      y: enemy.y,
+      ttl: 0.34,
+      maxTtl: 0.34,
+      radius: 28,
+      element: "fire",
+    });
+    enemy.status.meltedTimer = Math.max(enemy.status.meltedTimer, reaction.meltedDuration ?? 2);
+    damageEnemy(run, enemy, damage * reaction.damageMultiplier, "fire", false, false);
+  }
+
+  addFloatingText(run, enemy.x, enemy.y - 18, reaction.name, "#f2de84");
+  run.activeAnnouncement = `触发元素反应：${reaction.name}`;
+}
+
+function tryTriggerReaction(run: RunState, enemy: EnemyState, triggerElement: ElementType, damage: number) {
+  const elementState = enemy.status.elementState;
+  if (!elementState || elementState.reactionLockTimer > 0) {
+    return false;
+  }
+
+  const reaction = getReactionDefinition(elementState.element, triggerElement);
+  if (!reaction) {
+    return false;
+  }
+
+  if (elementState.element === "fire") {
+    enemy.status.burnTimer = 0;
+  }
+
+  if (elementState.element === "ice") {
+    enemy.status.slowTimer = 0;
+  }
+
+  enemy.status.elementState = undefined;
+  triggerReactionEffect(run, enemy, reaction, damage);
+
+  if (reaction.followupElementState) {
+    enemy.status.elementState = { ...reaction.followupElementState };
+    if (reaction.followupElementState.element === "ice") {
+      enemy.status.slowTimer = Math.max(enemy.status.slowTimer, reaction.followupElementState.timer);
+    }
+  }
+
+  return true;
+}
+
+function applyElementStatus(run: RunState, enemy: EnemyState, element: ElementType, damage: number) {
+  if (element === "physical" || element === "arcane") {
+    return;
+  }
+
+  const reacted = tryTriggerReaction(run, enemy, element, damage);
+  if (reacted) {
+    if (element === "lightning") {
+      enemy.status.shockTimer = Math.max(enemy.status.shockTimer, 0.18);
+    }
+    return;
+  }
+
+  applyElementBaseStatus(run, enemy, element);
 }
 
 function handleEnemyDeath(run: RunState, enemy: EnemyState) {
@@ -237,20 +572,36 @@ function handleEnemyDeath(run: RunState, enemy: EnemyState) {
   if (run.heroId === "warrior") {
     run.player.hp = Math.min(run.player.maxHp, run.player.hp + 3);
   }
+
+  if (run.buildState.killCooldownRefund > 0) {
+    reduceCastCooldown(run, run.buildState.killCooldownRefund);
+  }
+
+  if (hasRelic(run, "relic-overload-codex")) {
+    reduceCastCooldown(run, 0.7);
+  }
+
+  if (run.buildState.relicHeroBridgeEnabled && run.heroId === "ranger") {
+    reduceCastCooldown(run, 0.45);
+  }
 }
 
-function damageEnemy(run: RunState, enemy: EnemyState, amount: number, element: ElementType, allowArc = true) {
+function damageEnemy(run: RunState, enemy: EnemyState, amount: number, element: ElementType, allowArc = true, applyStatus = true) {
   const crit = Math.random() < getCurrentCritChance(run);
-  const total = amount * (1 + run.player.damageBonus) * (crit ? 1.7 : 1);
+  const closeRangeMultiplier = run.buildState.relicCloseRangeActive ? 1 + run.buildState.relicCloseRangeBonus : 1;
+  const meltedMultiplier = enemy.status.meltedTimer > 0 ? 1.28 : 1;
+  const total = amount * (1 + run.player.damageBonus) * closeRangeMultiplier * meltedMultiplier * getElementRelicMultiplier(run, element) * (crit ? 1.7 : 1);
   enemy.hp -= total;
-  applyElementStatus(enemy, element);
+  if (applyStatus && enemy.hp > 0) {
+    applyElementStatus(run, enemy, element, total);
+  }
   run.stats.damageDone += total;
   run.stats.peakDps = Math.max(run.stats.peakDps, total * 2.2);
   addFloatingText(run, enemy.x, enemy.y, `${Math.round(total)}${crit ? "!" : ""}`, elementPalette[element]);
 
   if (element === "lightning" && allowArc) {
     const nearby = run.enemies
-      .filter((candidate) => candidate.id !== enemy.id && distance(candidate.x, candidate.y, enemy.x, enemy.y) < 90)
+      .filter((candidate) => candidate.id !== enemy.id && distance(candidate.x, candidate.y, enemy.x, enemy.y) < 90 + run.buildState.shockArcRadiusBonus + (run.buildState.relicElementFocus === "lightning" ? 48 : 0))
       .slice(0, 2);
 
     nearby.forEach((candidate) => damageEnemy(run, candidate, amount * 0.42, "lightning", false));
@@ -268,8 +619,9 @@ function damagePlayer(run: RunState, amount: number) {
     return;
   }
 
-  run.player.hp = clamp(run.player.hp - amount, 0, run.player.maxHp);
-  addFloatingText(run, run.player.x, run.player.y - 18, `-${Math.round(amount)}`, "#ff9898");
+  const mitigated = amount * (1 - (run.buildState.relicCloseRangeActive ? run.buildState.relicCloseRangeMitigation : 0));
+  run.player.hp = clamp(run.player.hp - mitigated, 0, run.player.maxHp);
+  addFloatingText(run, run.player.x, run.player.y - 18, `-${Math.round(mitigated)}`, "#ff9898");
 
   if (run.player.hp <= 0) {
     run.mode = "defeat";
@@ -301,6 +653,7 @@ function fireStarterSkill(run: RunState) {
   let damage = definition.baseDamage + starter.level * 8;
   let radius = definition.radius * (1 + run.player.areaBonus);
   const angle = Math.atan2(target.y - run.player.y, target.x - run.player.x);
+  damage *= 1 + getStationaryBonus(run) * (starter.id === "orbit-sigil" || starter.id === "lure-mine" || starter.id === "shock-pulse" ? 1 : 0.4);
 
   if (hero.id === "warrior") {
     const core = run.heroCore.warrior;
@@ -312,6 +665,10 @@ function fireStarterSkill(run: RunState) {
     if (core.overdriveTimer > 0) {
       damage *= 1 + core.burstBonus;
       radius *= 1.16;
+    }
+
+    if (run.buildState.relicHeroBridgeEnabled && core.overdriveTimer > 0) {
+      radius *= 1.12;
     }
 
     spawnAttackEffect(run, {
@@ -356,7 +713,7 @@ function fireStarterSkill(run: RunState) {
       radius,
       damage,
       ttl: definition.duration,
-      pierce: 1 + Math.floor(starter.level / 2),
+      pierce: 1 + Math.floor(starter.level / 2) + run.buildState.projectilePierceBonus,
       element: starter.element,
     });
   }
@@ -366,6 +723,10 @@ function fireStarterSkill(run: RunState) {
     if (core.resonanceTimer > 0) {
       damage *= 1 + core.resonanceDamageBonus;
       radius *= 1 + core.resonanceAreaBonus;
+    }
+
+    if (run.buildState.relicHeroBridgeEnabled && core.resonanceTimer > 0) {
+      damage *= 1.12;
     }
 
     appendMageSigil(run, starter.element);
@@ -386,7 +747,7 @@ function fireStarterSkill(run: RunState) {
 }
 
 function castActiveSkills(run: RunState) {
-  const activeSkills = run.ownedSkills.filter((skill) => skills[skill.id].category === "active");
+  const activeSkills = getActiveSkills(run);
 
   if (run.player.castCooldown > 0 || activeSkills.length === 0) {
     return;
@@ -395,13 +756,21 @@ function castActiveSkills(run: RunState) {
   activeSkills.forEach((ownedSkill) => {
     const definition = skills[ownedSkill.id];
     let damage = definition.baseDamage + ownedSkill.level * 9;
+    const areaScale = 1 + run.player.areaBonus + run.buildState.activeAreaBonus + getStationaryBonus(run);
+    damage *= (1 + run.buildState.activeDamageBonus) * run.buildState.relicActiveDamageMultiplier * getElementRelicMultiplier(run, ownedSkill.element);
 
     if (run.heroId === "warrior" && run.heroCore.warrior.overdriveTimer > 0) {
       damage *= 1 + run.heroCore.warrior.burstBonus;
+      if (run.buildState.relicHeroBridgeEnabled) {
+        damage *= 1.12;
+      }
     }
 
     if (run.heroId === "mage" && run.heroCore.mage.resonanceTimer > 0) {
       damage *= 1 + run.heroCore.mage.resonanceDamageBonus;
+      if (run.buildState.relicHeroBridgeEnabled) {
+        damage *= 1.08;
+      }
     }
 
     if (ownedSkill.id === "flame-nova") {
@@ -411,12 +780,12 @@ function castActiveSkills(run: RunState) {
         y: run.player.y,
         ttl: 0.35,
         maxTtl: 0.35,
-        radius: definition.radius * (1 + run.player.areaBonus),
+        radius: definition.radius * areaScale,
         element: "fire",
       });
 
       run.enemies
-        .filter((enemy) => distance(enemy.x, enemy.y, run.player.x, run.player.y) < definition.radius * (1 + run.player.areaBonus))
+        .filter((enemy) => distance(enemy.x, enemy.y, run.player.x, run.player.y) < definition.radius * areaScale)
         .forEach((enemy) => damageEnemy(run, enemy, damage, "fire"));
     }
 
@@ -436,7 +805,7 @@ function castActiveSkills(run: RunState) {
           radius: definition.radius,
           damage,
           ttl: definition.duration,
-          pierce: 1,
+          pierce: 1 + run.buildState.projectilePierceBonus,
           element: "ice",
         });
         spawnAttackEffect(run, {
@@ -472,6 +841,109 @@ function castActiveSkills(run: RunState) {
         });
     }
 
+    if (ownedSkill.id === "whirling-guard") {
+      const radius = definition.radius * areaScale;
+      spawnAttackEffect(run, {
+        kind: "nova",
+        x: run.player.x,
+        y: run.player.y,
+        ttl: 0.3,
+        maxTtl: 0.3,
+        radius,
+        element: ownedSkill.element,
+      });
+      run.enemies
+        .filter((enemy) => distance(enemy.x, enemy.y, run.player.x, run.player.y) < radius + enemy.radius)
+        .forEach((enemy) => damageEnemy(run, enemy, damage, ownedSkill.element));
+    }
+
+    if (ownedSkill.id === "seeker-blades") {
+      for (let index = 0; index < 3; index += 1) {
+        const target = getNearestEnemy(run, run.player.x + index * 6, run.player.y - index * 6);
+        const currentAngle = target ? Math.atan2(target.y - run.player.y, target.x - run.player.x) + (index - 1) * 0.14 : (index - 1) * 0.3;
+        spawnProjectile(run, {
+          source: "hero",
+          skillId: ownedSkill.id,
+          x: run.player.x,
+          y: run.player.y,
+          vx: Math.cos(currentAngle) * definition.projectileSpeed,
+          vy: Math.sin(currentAngle) * definition.projectileSpeed,
+          radius: definition.radius,
+          damage,
+          ttl: definition.duration,
+          pierce: run.buildState.projectilePierceBonus,
+          element: ownedSkill.element,
+          homingStrength: 4.8,
+        });
+      }
+    }
+
+    if (ownedSkill.id === "shock-pulse") {
+      const target = getNearestEnemy(run);
+      const pulseAngle = target ? Math.atan2(target.y - run.player.y, target.x - run.player.x) : 0;
+      spawnAttackEffect(run, {
+        kind: "slash",
+        x: run.player.x,
+        y: run.player.y,
+        ttl: 0.18,
+        maxTtl: 0.18,
+        radius: definition.radius * areaScale,
+        angle: pulseAngle,
+        element: ownedSkill.element,
+      });
+
+      run.enemies
+        .filter((enemy) => {
+          const enemyAngle = Math.atan2(enemy.y - run.player.y, enemy.x - run.player.x);
+          const delta = Math.atan2(Math.sin(enemyAngle - pulseAngle), Math.cos(enemyAngle - pulseAngle));
+          return distance(enemy.x, enemy.y, run.player.x, run.player.y) < definition.radius * areaScale && Math.abs(delta) < 0.62;
+        })
+        .forEach((enemy) => damageEnemy(run, enemy, damage * 1.1, ownedSkill.element));
+    }
+
+    if (ownedSkill.id === "orbit-sigil") {
+      const orbitRadius = 42 + run.buildState.orbitRadiusBonus + run.player.areaBonus * 24;
+      for (let index = 0; index < 4; index += 1) {
+        spawnProjectile(run, {
+          source: "hero",
+          skillId: ownedSkill.id,
+          x: run.player.x,
+          y: run.player.y,
+          vx: 0,
+          vy: 0,
+          radius: definition.radius,
+          damage,
+          ttl: definition.duration,
+          pierce: 0,
+          element: ownedSkill.element,
+          anchorToPlayer: true,
+          orbitAngle: (Math.PI / 2) * index,
+          orbitRadius,
+          orbitSpeed: 2.8,
+        });
+      }
+    }
+
+    if (ownedSkill.id === "lure-mine") {
+      const target = getNearestEnemy(run);
+      const mineAngle = target ? Math.atan2(target.y - run.player.y, target.x - run.player.x) : 0;
+      spawnProjectile(run, {
+        source: "hero",
+        skillId: ownedSkill.id,
+        x: run.player.x + Math.cos(mineAngle) * 64,
+        y: run.player.y + Math.sin(mineAngle) * 64,
+        vx: 0,
+        vy: 0,
+        radius: 12,
+        damage,
+        ttl: definition.duration,
+        pierce: 0,
+        element: ownedSkill.element,
+        explosionRadius: definition.radius * areaScale,
+        explodeOnExpire: true,
+      });
+    }
+
     if (run.heroId === "mage") {
       for (let index = 0; index < 1 + run.heroCore.mage.bonusSigilsOnActiveCast; index += 1) {
         appendMageSigil(run, definition.baseElement);
@@ -479,7 +951,7 @@ function castActiveSkills(run: RunState) {
     }
   });
 
-  run.player.castCooldown = Math.min(...activeSkills.map((skill) => skills[skill.id].cooldown));
+  run.player.castCooldown = getCastCooldown(run);
   run.activeAnnouncement = "主动技能已释放";
 }
 
@@ -504,15 +976,57 @@ function spawnEnemy(run: RunState) {
     attackCooldown: 1.8,
     color: shooter ? "#b893ff" : "#ff8a78",
     xpReward: shooter ? 10 : 8,
-    status: { burnTimer: 0, slowTimer: 0, shockTimer: 0 },
+    status: { burnTimer: 0, slowTimer: 0, shockTimer: 0, meltedTimer: 0 },
   });
 }
 
 function updateProjectiles(run: RunState, dt: number) {
   run.projectiles.forEach((projectile) => {
-    projectile.x += projectile.vx * dt;
-    projectile.y += projectile.vy * dt;
+    if (projectile.anchorToPlayer && projectile.orbitAngle !== undefined && projectile.orbitRadius !== undefined) {
+      projectile.orbitAngle += (projectile.orbitSpeed ?? 0) * dt;
+      projectile.x = run.player.x + Math.cos(projectile.orbitAngle) * projectile.orbitRadius;
+      projectile.y = run.player.y + Math.sin(projectile.orbitAngle) * projectile.orbitRadius;
+    } else {
+      if (projectile.source === "hero" && projectile.homingStrength) {
+        const target = getNearestEnemy(run, projectile.x, projectile.y);
+        if (target) {
+          const speed = Math.hypot(projectile.vx, projectile.vy) || skills[projectile.skillId].projectileSpeed || 240;
+          const targetAngle = Math.atan2(target.y - projectile.y, target.x - projectile.x);
+          const currentAngle = Math.atan2(projectile.vy, projectile.vx);
+          const nextAngle = currentAngle + clamp(Math.atan2(Math.sin(targetAngle - currentAngle), Math.cos(targetAngle - currentAngle)), -projectile.homingStrength * dt, projectile.homingStrength * dt);
+          projectile.vx = Math.cos(nextAngle) * speed;
+          projectile.vy = Math.sin(nextAngle) * speed;
+        }
+      }
+
+      if (projectile.source === "hero" && run.buildState.returningShots && !projectile.hasReturned && !projectile.explodeOnExpire && skills[projectile.skillId]?.tags?.includes("projectile") && projectile.ttl < skills[projectile.skillId].duration * 0.45) {
+        projectile.vx *= -1;
+        projectile.vy *= -1;
+        projectile.hasReturned = true;
+      }
+
+      projectile.x += projectile.vx * dt;
+      projectile.y += projectile.vy * dt;
+    }
+
     projectile.ttl -= dt;
+  });
+
+  run.projectiles.forEach((projectile) => {
+    if (projectile.explodeOnExpire && projectile.ttl <= 0 && projectile.explosionRadius) {
+      spawnAttackEffect(run, {
+        kind: "burst",
+        x: projectile.x,
+        y: projectile.y,
+        ttl: 0.24,
+        maxTtl: 0.24,
+        radius: projectile.explosionRadius,
+        element: projectile.element,
+      });
+      run.enemies
+        .filter((enemy) => distance(enemy.x, enemy.y, projectile.x, projectile.y) < projectile.explosionRadius! + enemy.radius)
+        .forEach((enemy) => damageEnemy(run, enemy, projectile.damage, projectile.element));
+    }
   });
 
   run.projectiles = run.projectiles.filter((projectile) => projectile.ttl > 0);
@@ -527,6 +1041,7 @@ function updateProjectiles(run: RunState, dt: number) {
       run.enemies.forEach((enemy) => {
         if (projectile.ttl > 0 && distance(projectile.x, projectile.y, enemy.x, enemy.y) < enemy.radius + projectile.radius) {
           damageEnemy(run, enemy, projectile.damage, projectile.element);
+          spawnSplitShots(run, projectile, enemy);
 
           if (run.heroId === "ranger" && projectile.skillId === "ricochet-shot" && enemy.hp > 0) {
             gainRangerMomentum(run, 7);
@@ -539,8 +1054,21 @@ function updateProjectiles(run: RunState, dt: number) {
               .forEach((candidate) => damageEnemy(run, candidate, projectile.damage * 0.6, projectile.element, false));
           }
 
+          if (run.buildState.bounceShots && !projectile.anchorToPlayer) {
+            const bounceTarget = run.enemies
+              .filter((candidate) => candidate.id !== enemy.id && candidate.hp > 0)
+              .sort((left, right) => distance(left.x, left.y, enemy.x, enemy.y) - distance(right.x, right.y, enemy.x, enemy.y))[0];
+
+            if (bounceTarget && distance(bounceTarget.x, bounceTarget.y, enemy.x, enemy.y) < 180) {
+              const speed = Math.hypot(projectile.vx, projectile.vy) || 260;
+              const bounceAngle = Math.atan2(bounceTarget.y - enemy.y, bounceTarget.x - enemy.x);
+              projectile.vx = Math.cos(bounceAngle) * speed;
+              projectile.vy = Math.sin(bounceAngle) * speed;
+            }
+          }
+
           projectile.pierce -= 1;
-          if (projectile.pierce < 0) {
+          if (projectile.pierce < 0 || projectile.anchorToPlayer) {
             projectile.ttl = 0;
           }
         }
@@ -553,6 +1081,7 @@ export function buildUpgradeOptions(run: RunState): UpgradeOption[] {
   const ownedIds = new Set(run.ownedSkills.map((skill) => skill.id));
   const options: UpgradeOption[] = [];
   const heroCoreOptions = heroCoreUpgradePool[run.heroId].filter((option) => !run.takenHeroCoreUpgrades.includes(option.id));
+  const ownedAffixIds = new Set(run.buildState.affixes.map((affix) => affix.id));
 
   unlockableSkillIds
     .filter((skillId) => !ownedIds.has(skillId))
@@ -564,6 +1093,7 @@ export function buildUpgradeOptions(run: RunState): UpgradeOption[] {
         description: skills[skillId].description,
         rarity: "rare",
         targetId: skillId,
+        category: "skill",
       });
     });
 
@@ -575,6 +1105,7 @@ export function buildUpgradeOptions(run: RunState): UpgradeOption[] {
       description: "提升该技能伤害与效果范围，强化当前构筑核心。",
       rarity: skill.level >= 2 ? "epic" : "common",
       targetId: skill.id,
+      category: "skill",
     });
   });
 
@@ -587,24 +1118,37 @@ export function buildUpgradeOptions(run: RunState): UpgradeOption[] {
       rarity: "rare",
       targetId: heroes[run.heroId].starterSkillId,
       element: choice.element,
+      category: "element",
     });
   });
 
+  affixPool
+    .filter((affix) => !ownedAffixIds.has(affix.id))
+    .forEach((affix) => {
+      options.push({
+        id: affix.id,
+        kind: "affix",
+        title: affix.name,
+        description: affix.description,
+        rarity: affix.rarity,
+        category: affix.category,
+      });
+    });
+
   statUpgradePool.forEach((stat) => options.push(stat));
   const picks: UpgradeOption[] = [];
-  const buildOptions = options.filter((option) => option.kind === "new-skill" || option.kind === "skill-up" || option.kind === "element-mod");
-  const statOptions = options.filter((option) => option.kind === "stat-mod");
+  const skillOptions = options.filter((option) => option.kind === "new-skill" || option.kind === "skill-up");
+  const affixOptions = options.filter((option) => option.kind === "affix" || option.kind === "element-mod");
+  const guaranteedUtility = heroCoreOptions.length > 0 && shouldOfferHeroCoreUpgrade(run)
+    ? randomPick(heroCoreOptions, 1)
+    : randomPick(statUpgradePool, 1);
 
-  if (heroCoreOptions.length > 0 && shouldOfferHeroCoreUpgrade(run)) {
-    picks.push(...randomPick(heroCoreOptions, 1));
-  }
+  picks.push(...randomPick(skillOptions, 1));
+  picks.push(...randomPick(affixOptions.filter((option) => !picks.some((picked) => picked.id === option.id)), 1));
 
-  if (picks.some((option) => option.kind === "hero-core")) {
-    const preferredBuild = randomPick(buildOptions.filter((option) => !picks.some((picked) => picked.id === option.id)), 1);
-    picks.push(...preferredBuild);
-
-    const preferredStat = randomPick(statOptions.filter((option) => !picks.some((picked) => picked.id === option.id)), 1);
-    picks.push(...preferredStat);
+  const utilityChoice = guaranteedUtility.filter((option) => !picks.some((picked) => picked.id === option.id));
+  if (utilityChoice.length > 0) {
+    picks.push(...utilityChoice);
   }
 
   const remainingOptions = options.filter((option) => !picks.some((picked) => picked.id === option.id));
@@ -639,6 +1183,30 @@ export function createInitialRun(heroId: HeroClass): RunState {
     projectiles: [],
     attackEffects: [],
     ownedSkills: [{ id: hero.starterSkillId, level: 1, element: skills[hero.starterSkillId].baseElement }],
+    buildState: {
+      affixes: [],
+      projectilePierceBonus: 0,
+      bounceShots: false,
+      returningShots: false,
+      activeDamageBonus: 0,
+      activeCooldownMultiplier: 1,
+      activeAreaBonus: 0,
+      killCooldownRefund: 0,
+      burnDurationBonus: 0,
+      shockArcRadiusBonus: 0,
+      orbitRadiusBonus: 0,
+      relicActiveDamageMultiplier: 1,
+      relicProjectileSplitCount: 0,
+      relicProjectileSplitDamageMultiplier: 0.65,
+      relicCloseRangeBonus: 0,
+      relicCloseRangeMitigation: 0,
+      relicCloseRangeRadius: 96,
+      relicCloseRangeActive: false,
+      relicStationaryBonus: 0,
+      relicStationaryCharge: 0,
+      relicElementBonus: 0,
+      relicHeroBridgeEnabled: false,
+    },
     heroCore: {
       warrior: {
         fury: 0,
@@ -678,6 +1246,8 @@ export function createInitialRun(heroId: HeroClass): RunState {
     },
     takenHeroCoreUpgrades: [],
     upgrades: [],
+    relics: [],
+    pendingRelicChoices: [],
     floatingTexts: [],
     stats: { kills: 0, damageDone: 0, peakDps: 0 },
     nextEnemyId: 1,
@@ -685,6 +1255,8 @@ export function createInitialRun(heroId: HeroClass): RunState {
     nextAttackEffectId: 1,
     nextFloatingTextId: 1,
     spawnTimer: 1,
+    nextRelicTime: 80,
+    relicChoiceCount: 0,
     activeAnnouncement: "撑过 4 分钟并构筑你的元素流派",
   };
 }
@@ -718,6 +1290,7 @@ export function updateRunState(run: RunState, controls: ControlState, dt: number
   const moveBonus = run.heroId === "ranger" && (horizontal !== 0 || vertical !== 0) ? 1.08 : 1;
   run.player.x = clamp(run.player.x + (horizontal / moving) * run.player.moveSpeed * moveBonus * dt, 24, ARENA_WIDTH - 24);
   run.player.y = clamp(run.player.y + (vertical / moving) * run.player.moveSpeed * moveBonus * dt, 24, ARENA_HEIGHT - 24);
+  updateRelicMomentum(run, isMoving, dt);
 
   if (run.heroId === "warrior") {
     const core = run.heroCore.warrior;
@@ -761,6 +1334,11 @@ export function updateRunState(run: RunState, controls: ControlState, dt: number
     }
   }
 
+  if (shouldTriggerRelicChoice(run)) {
+    triggerRelicChoice(run);
+    return;
+  }
+
   if (run.spawnTimer <= 0) {
     spawnEnemy(run);
     if (run.wave >= 4) {
@@ -782,8 +1360,16 @@ export function updateRunState(run: RunState, controls: ControlState, dt: number
     enemy.status.burnTimer = Math.max(0, enemy.status.burnTimer - dt);
     enemy.status.slowTimer = Math.max(0, enemy.status.slowTimer - dt);
     enemy.status.shockTimer = Math.max(0, enemy.status.shockTimer - dt);
+    enemy.status.meltedTimer = Math.max(0, enemy.status.meltedTimer - dt);
+    if (enemy.status.elementState) {
+      enemy.status.elementState.timer = Math.max(0, enemy.status.elementState.timer - dt);
+      enemy.status.elementState.reactionLockTimer = Math.max(0, enemy.status.elementState.reactionLockTimer - dt);
+      if (enemy.status.elementState.timer <= 0) {
+        enemy.status.elementState = undefined;
+      }
+    }
     if (enemy.status.burnTimer > 0) {
-      damageEnemy(run, enemy, dt * 7, "fire", false);
+      damageEnemy(run, enemy, dt * 7, "fire", false, false);
     }
 
     const angle = Math.atan2(run.player.y - enemy.y, run.player.x - enemy.x);
@@ -912,12 +1498,88 @@ export function applyUpgrade(run: RunState, option: UpgradeOption) {
     }
   }
 
+  if (option.kind === "affix") {
+    run.buildState.affixes.push({ id: option.id, stacks: 1 });
+
+    if (option.id === "affix-bounce-shot") {
+      run.buildState.bounceShots = true;
+    }
+    if (option.id === "affix-deep-pierce") {
+      run.buildState.projectilePierceBonus += 2;
+    }
+    if (option.id === "affix-return-loop") {
+      run.buildState.returningShots = true;
+    }
+    if (option.id === "affix-blast-wave") {
+      run.buildState.activeAreaBonus += 0.16;
+    }
+    if (option.id === "affix-orbit-harmonics") {
+      run.buildState.orbitRadiusBonus += 14;
+    }
+    if (option.id === "affix-cooldown-weave") {
+      run.buildState.activeCooldownMultiplier *= 0.84;
+    }
+    if (option.id === "affix-kill-refresh") {
+      run.buildState.killCooldownRefund += 0.5;
+    }
+    if (option.id === "affix-ember-trail") {
+      run.buildState.burnDurationBonus += 0.75;
+    }
+    if (option.id === "affix-static-spread") {
+      run.buildState.shockArcRadiusBonus += 40;
+    }
+  }
+
   run.mode = "running";
   run.upgrades = [];
   run.activeAnnouncement = `${option.title} 已生效`;
 }
 
+export function applyRelic(run: RunState, relic: RelicDefinition) {
+  run.relics.push({ id: relic.id });
+
+  if (relic.id === "relic-overload-codex") {
+    run.buildState.relicActiveDamageMultiplier *= 1.35;
+    run.buildState.activeCooldownMultiplier *= 1.18;
+  }
+
+  if (relic.id === "relic-split-plume") {
+    run.buildState.relicProjectileSplitCount = 2;
+    run.buildState.relicProjectileSplitDamageMultiplier = 0.68;
+  }
+
+  if (relic.id === "relic-forge-emblem") {
+    run.buildState.relicCloseRangeBonus += 0.22;
+    run.buildState.relicCloseRangeMitigation += 0.18;
+    run.buildState.relicCloseRangeRadius = 112;
+  }
+
+  if (relic.id === "relic-star-chart") {
+    run.buildState.relicStationaryBonus += 0.24;
+  }
+
+  if (relic.id === "relic-element-vessel") {
+    run.buildState.relicElementFocus = getDominantElement(run);
+    run.buildState.relicElementBonus += 0.22;
+  }
+
+  if (relic.id === "relic-hunt-signet") {
+    run.buildState.relicHeroBridgeEnabled = true;
+  }
+
+  run.pendingRelicChoices = [];
+  run.relicChoiceCount += 1;
+  run.nextRelicTime = run.relicChoiceCount === 1 ? 175 : Number.POSITIVE_INFINITY;
+  run.mode = "running";
+  run.activeAnnouncement = `${relic.name} 已生效`;
+}
+
 export function buildRunSummary(run: RunState): RunSummary {
+  const relicSummaries = run.relics
+    .map((relic) => relicPool.find((entry) => entry.id === relic.id))
+    .filter((relic) => relic !== undefined)
+    .map((relic) => `遗物：${relic.name}`);
+
   return {
     heroId: run.heroId,
     heroName: heroes[run.heroId].name,
@@ -925,7 +1587,7 @@ export function buildRunSummary(run: RunState): RunSummary {
     wave: run.wave,
     kills: run.stats.kills,
     damageDone: Math.round(run.stats.damageDone),
-    ownedSkills: run.ownedSkills.map((skill) => `${skills[skill.id].name} Lv.${skill.level}`),
+    ownedSkills: [...run.ownedSkills.map((skill) => `${skills[skill.id].name} Lv.${skill.level}`), ...relicSummaries],
     ending: run.mode === "victory" ? "victory" : "defeat",
   };
 }

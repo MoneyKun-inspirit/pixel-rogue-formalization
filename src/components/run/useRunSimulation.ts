@@ -1,16 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { heroes } from "@/game/content";
-import { applyUpgrade, buildRunSummary, createInitialRun, updateRunState } from "@/game/engine";
-import type { HeroClass, RunSnapshot, UpgradeOption } from "@/game/types";
+import { applyRelic, applyUpgrade, buildRunSummary, createInitialRun, updateRunState } from "@/game/engine";
+import type { HeroClass, RelicDefinition, RunSnapshot, UpgradeOption } from "@/game/types";
 
 function cloneSnapshot(snapshot: RunSnapshot) {
   return {
     ...snapshot,
     player: { ...snapshot.player },
-    enemies: snapshot.enemies.map((enemy) => ({ ...enemy, status: { ...enemy.status } })),
+    enemies: snapshot.enemies.map((enemy) => ({
+      ...enemy,
+      status: {
+        ...enemy.status,
+        elementState: enemy.status.elementState ? { ...enemy.status.elementState } : undefined,
+      },
+    })),
     projectiles: snapshot.projectiles.map((projectile) => ({ ...projectile })),
     attackEffects: snapshot.attackEffects.map((effect) => ({ ...effect })),
     ownedSkills: snapshot.ownedSkills.map((skill) => ({ ...skill })),
+    buildState: {
+      ...snapshot.buildState,
+      affixes: snapshot.buildState.affixes.map((affix) => ({ ...affix })),
+    },
     heroCore: {
       warrior: { ...snapshot.heroCore.warrior },
       ranger: { ...snapshot.heroCore.ranger },
@@ -18,6 +28,8 @@ function cloneSnapshot(snapshot: RunSnapshot) {
     },
     takenHeroCoreUpgrades: [...snapshot.takenHeroCoreUpgrades],
     upgrades: snapshot.upgrades.map((upgrade) => ({ ...upgrade })),
+    relics: snapshot.relics.map((relic) => ({ ...relic })),
+    pendingRelicChoices: snapshot.pendingRelicChoices.map((relic) => ({ ...relic })),
     floatingTexts: snapshot.floatingTexts.map((text) => ({ ...text })),
     stats: { ...snapshot.stats },
     hero: snapshot.hero,
@@ -73,8 +85,14 @@ export function useRunSimulation(heroId: HeroClass, controls: { up: boolean; dow
     setSnapshot({ ...cloneSnapshot({ ...runRef.current, hero: heroes[heroId] }) });
   }, [heroId]);
 
+  const chooseRelic = useCallback((relic: RelicDefinition) => {
+    applyRelic(runRef.current, relic);
+    setSnapshot({ ...cloneSnapshot({ ...runRef.current, hero: heroes[heroId] }) });
+  }, [heroId]);
+
   return {
     snapshot,
     chooseUpgrade,
+    chooseRelic,
   };
 }

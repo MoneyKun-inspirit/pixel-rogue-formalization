@@ -2,8 +2,12 @@ export type HeroClass = "warrior" | "ranger" | "mage";
 export type ElementType = "physical" | "fire" | "ice" | "lightning" | "arcane";
 export type SkillCategory = "auto" | "active";
 export type EnemyKind = "chaser" | "shooter";
-export type UpgradeKind = "new-skill" | "skill-up" | "element-mod" | "stat-mod" | "hero-core";
-export type RunMode = "running" | "levelup" | "defeat" | "victory";
+export type UpgradeKind = "new-skill" | "skill-up" | "element-mod" | "stat-mod" | "hero-core" | "affix";
+export type RunMode = "running" | "levelup" | "relic-choice" | "defeat" | "victory";
+export type SkillTag = "projectile" | "burst" | "orbit" | "trap" | "close-range" | "tracking";
+export type AffixCategory = "projectile" | "area" | "tempo" | "element";
+export type RelicCategory = "active" | "projectile" | "stance" | "elemental" | "hero-bridge";
+export type ReactionId = "overload-burst" | "steam-shock" | "conductive-shatter" | "melt-pierce";
 
 export interface HeroDefinition {
   id: HeroClass;
@@ -31,12 +35,63 @@ export interface SkillDefinition {
   projectileSpeed: number;
   duration: number;
   description: string;
+  tags?: SkillTag[];
+  shared?: boolean;
 }
 
 export interface OwnedSkill {
   id: string;
   level: number;
   element: ElementType;
+}
+
+export interface AffixDefinition {
+  id: string;
+  name: string;
+  description: string;
+  rarity: "common" | "rare" | "epic";
+  category: AffixCategory;
+}
+
+export interface OwnedAffix {
+  id: string;
+  stacks: number;
+}
+
+export interface RelicDefinition {
+  id: string;
+  name: string;
+  description: string;
+  summary: string;
+  rarity: "rare" | "epic";
+  category: RelicCategory;
+  focusSkillIds?: string[];
+  focusElements?: ElementType[];
+}
+
+export interface OwnedRelic {
+  id: string;
+}
+
+export interface ElementState {
+  element: "fire" | "ice";
+  timer: number;
+  reactionLockTimer: number;
+}
+
+export interface ReactionDefinition {
+  id: ReactionId;
+  name: string;
+  description: string;
+  baseElement: "fire" | "ice";
+  triggerElement: "fire" | "ice" | "lightning";
+  damageMultiplier: number;
+  radius: number;
+  chainCount?: number;
+  chainDamageMultiplier?: number;
+  followupElementState?: ElementState;
+  applyMelted?: boolean;
+  meltedDuration?: number;
 }
 
 export interface UpgradeOption {
@@ -48,6 +103,7 @@ export interface UpgradeOption {
   targetId?: string;
   value?: number;
   element?: ElementType;
+  category?: AffixCategory | "skill" | "utility";
 }
 
 export interface WarriorCoreState {
@@ -94,6 +150,32 @@ export interface HeroCoreState {
   mage: MageCoreState;
 }
 
+export interface BuildState {
+  affixes: OwnedAffix[];
+  projectilePierceBonus: number;
+  bounceShots: boolean;
+  returningShots: boolean;
+  activeDamageBonus: number;
+  activeCooldownMultiplier: number;
+  activeAreaBonus: number;
+  killCooldownRefund: number;
+  burnDurationBonus: number;
+  shockArcRadiusBonus: number;
+  orbitRadiusBonus: number;
+  relicActiveDamageMultiplier: number;
+  relicProjectileSplitCount: number;
+  relicProjectileSplitDamageMultiplier: number;
+  relicCloseRangeBonus: number;
+  relicCloseRangeMitigation: number;
+  relicCloseRangeRadius: number;
+  relicCloseRangeActive: boolean;
+  relicStationaryBonus: number;
+  relicStationaryCharge: number;
+  relicElementFocus?: ElementType;
+  relicElementBonus: number;
+  relicHeroBridgeEnabled: boolean;
+}
+
 export interface PlayerState {
   x: number;
   y: number;
@@ -114,6 +196,8 @@ export interface StatusState {
   burnTimer: number;
   slowTimer: number;
   shockTimer: number;
+  meltedTimer: number;
+  elementState?: ElementState;
 }
 
 export interface EnemyState {
@@ -145,11 +229,20 @@ export interface ProjectileState {
   ttl: number;
   pierce: number;
   element: ElementType;
+  homingStrength?: number;
+  anchorToPlayer?: boolean;
+  orbitAngle?: number;
+  orbitRadius?: number;
+  orbitSpeed?: number;
+  explosionRadius?: number;
+  explodeOnExpire?: boolean;
+  hasReturned?: boolean;
+  splitGeneration?: number;
 }
 
 export interface AttackEffect {
   id: number;
-  kind: "slash" | "nova" | "lance" | "lightning" | "burst";
+  kind: "slash" | "nova" | "lance" | "lightning" | "burst" | "steam" | "shatter" | "melt";
   x: number;
   y: number;
   ttl: number;
@@ -186,9 +279,12 @@ export interface RunState {
   projectiles: ProjectileState[];
   attackEffects: AttackEffect[];
   ownedSkills: OwnedSkill[];
+  buildState: BuildState;
   heroCore: HeroCoreState;
   takenHeroCoreUpgrades: string[];
   upgrades: UpgradeOption[];
+  relics: OwnedRelic[];
+  pendingRelicChoices: RelicDefinition[];
   floatingTexts: FloatingText[];
   stats: RunStats;
   nextEnemyId: number;
@@ -196,6 +292,8 @@ export interface RunState {
   nextAttackEffectId: number;
   nextFloatingTextId: number;
   spawnTimer: number;
+  nextRelicTime: number;
+  relicChoiceCount: number;
   activeAnnouncement: string;
 }
 

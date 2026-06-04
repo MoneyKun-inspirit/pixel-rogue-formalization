@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 import { CanvasArena } from "@/components/run/CanvasArena";
+import { RelicPanel } from "@/components/run/RelicPanel";
 import { RunHud } from "@/components/run/RunHud";
 import { RunSummaryPanel } from "@/components/run/RunSummaryPanel";
 import { UpgradePanel } from "@/components/run/UpgradePanel";
@@ -22,7 +23,7 @@ export default function RunPage() {
     setSummaryLines(ownedSkills);
   }, []);
 
-  const { snapshot, chooseUpgrade } = useRunSimulation(heroId, controls, handleFinish);
+  const { snapshot, chooseUpgrade, chooseRelic } = useRunSimulation(heroId, controls, handleFinish);
 
   useEffect(() => {
     if (!ending) {
@@ -34,19 +35,19 @@ export default function RunPage() {
 
   useEffect(() => {
     function handleUpgradeShortcut(event: KeyboardEvent) {
-      if (snapshot.mode !== "levelup") {
-        return;
+      const index = Number(event.key) - 1;
+      if (snapshot.mode === "levelup" && index >= 0 && index < snapshot.upgrades.length) {
+        chooseUpgrade(snapshot.upgrades[index]);
       }
 
-      const index = Number(event.key) - 1;
-      if (index >= 0 && index < snapshot.upgrades.length) {
-        chooseUpgrade(snapshot.upgrades[index]);
+      if (snapshot.mode === "relic-choice" && index >= 0 && index < snapshot.pendingRelicChoices.length) {
+        chooseRelic(snapshot.pendingRelicChoices[index]);
       }
     }
 
     window.addEventListener("keydown", handleUpgradeShortcut);
     return () => window.removeEventListener("keydown", handleUpgradeShortcut);
-  }, [chooseUpgrade, snapshot.mode, snapshot.upgrades]);
+  }, [chooseRelic, chooseUpgrade, snapshot.mode, snapshot.pendingRelicChoices, snapshot.upgrades]);
 
   const summaryTitle = useMemo(() => {
     return [
@@ -79,6 +80,7 @@ export default function RunPage() {
           <div className="relative">
             <CanvasArena snapshot={snapshot} />
             {snapshot.mode === "levelup" ? <UpgradePanel options={snapshot.upgrades} onChoose={chooseUpgrade} /> : null}
+            {snapshot.mode === "relic-choice" ? <RelicPanel relics={snapshot.pendingRelicChoices} onChoose={chooseRelic} /> : null}
             {ending ? (
               <RunSummaryPanel
                 heroName={snapshot.hero.name}

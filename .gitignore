@@ -26,6 +26,7 @@ dist-ssr
 # Local tooling / auth
 .gh-config/
 .tmp-gh/
+.tools/
 
 # Brainstorm artifacts
 .superpowers/
